@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ライフゲーム シンセサイザー</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+        }
+    </style>
+</head>
+<body>
+    <h1>ランダム → 開始</h1>
+    <canvas id="gameCanvas" width="400" height="400"></canvas>
+    <br>
+    <button id="startStop">開始/停止</button>
+    <button id="clear">クリア</button>
+    <button id="random">ランダム</button>
+    <div>
+        突然変異率: <input type="range" id="mutationRate" min="0" max="10" value="1" step="0.1">
+        <span id="mutationRateValue">1%</span>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const cellSize = 20;
+        const cols = canvas.width / cellSize;
+        const rows = canvas.height / cellSize;
+        let grid = createGrid();
+        let isRunning = false;
+        let audioContext;
+        let mutationRate = 0.01;
+        const colors = ['red', 'green', 'blue'];
+
+        function createGrid() {
+            return new Array(cols).fill(null)
+                .map(() => new Array(rows).fill(null));
+        }
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < cols; i++) {
+                for (let j = 0; j < rows; j++) {
+                    if (grid[i][j]) {
+                        ctx.fillStyle = grid[i][j];
+                        ctx.fillRect(i * cellSize, j * cellSize, cellSize - 1, cellSize - 1);
+                    }
+                }
+            }
+        }
+
+        function countNeighbors(x, y) {
+            let count = {red: 0, green: 0, blue: 0};
+            for (let i = -1; i <= 1; i++) {
+                for (let j = -1; j <= 1; j++) {
+                    if (i === 0 && j === 0) continue;
+                    const col = (x + i + cols) % cols;
+                    const row = (y + j + rows) % rows;
+                    if (grid[col][row]) {
+                        count[grid[col][row]]++;
+                    }
+                }
+            }
+            return count;
+        }
+
+        function updateGrid() {
+            const newGrid = createGrid();
+            const changedCells = {red: [], green: [], blue: []};
+            for (let i = 0; i < cols; i++) {
+                for (let j = 0; j < rows; j++) {
+                    const neighbors = countNeighbors(i, j);
+                    const totalNeighbors = neighbors.red + neighbors.green + neighbors.blue;
+                    if (grid[i][j]) {
+                        if (totalNeighbors === 2 || totalNeighbors === 3) {
+                            newGrid[i][j] = grid[i][j];
+                        } else {
+                            changedCells[grid[i][j]].push({x: i, y: j});
+                        }
+                    } else {
+                        if (totalNeighbors === 3) {
+                            const dominantColor = Object.keys(neighbors).reduce((a, b) => neighbors[a] > neighbors[b] ? a : b);
+                            newGrid[i][j] = dominantColor;
+                        }
+                    }
+                    // 突然変異のロジック
+                    if (Math.random() < mutationRate) {
+                        if (newGrid[i][j]) {
+                            changedCells[newGrid[i][j]].push({x: i, y: j});
+                            newGrid[i][j] = null;
+                        } else {
+                            newGrid[i][j] = colors[Math.floor(Math.random() * colors.length)];
+                        }
+                    }
+                }
+            }
+            grid = newGrid;
+            const totalChangedCells = changedCells.red.length + changedCells.green.length + changedCells.blue.length;
+            if (totalChangedCells > 0) {
+                const dominantColor = Object.keys(changedCells).reduce((a, b) => changedCells[a].length > changedCells[b].length ? a : b);
+                playSound(changedCells[dominantColor], dominantColor);
+            }
+        }
+
+        function playSound(cells, color) {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            if (cells.length === 0) return;
+
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+
+            const avgX = cells.reduce((sum, cell) => sum + cell.x, 0) / cells.length;
+            const avgY = cells.reduce((sum, cell) => sum + cell.y, 0) / cells.length;
+
+            const frequency = 220 + (avgX / cols) * 880;
+            const volume = 1 - (avgY / rows);
+
+            switch (color) {
+                case 'red':
+                    oscillator.type = 'sine';
+                    break;
+                case 'green':
+                    oscillator.type = 'square';
+                    break;
+                case 'blue':
+                    oscillator.type = 'sawtooth';
+                    break;
+            }
+
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            
+            gainNode.gain.setValueAtTime(volume * 0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.00001, audioContext.currentTime + 0.5);
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.5);
+        }
+
+        function gameLoop() {
+            if (isRunning) {
+                updateGrid();
+                drawGrid();
+                requestAnimationFrame(gameLoop);
+            }
+        }
+
+        canvas.addEventListener('click', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((event.clientX - rect.left) / cellSize);
+            const y = Math.floor((event.clientY - rect.top) / cellSize);
+            if (grid[x][y]) {
+                grid[x][y] = null;
+            } else {
+                grid[x][y] = colors[Math.floor(Math.random() * colors.length)];
+            }
+            drawGrid();
+        });
+
+        document.getElementById('startStop').addEventListener('click', () => {
+            isRunning = !isRunning;
+            if (isRunning) gameLoop();
+        });
+
+        document.getElementById('clear').addEventListener('click', () => {
+            grid = createGrid();
+            drawGrid();
+        });
+
+        document.getElementById('random').addEventListener('click', () => {
+            grid = createGrid().map(row => row.map(() => Math.random() > 0.7 ? colors[Math.floor(Math.random() * colors.length)] : null));
+            drawGrid();
+        });
+
+        const mutationRateSlider = document.getElementById('mutationRate');
+        const mutationRateValue = document.getElementById('mutationRateValue');
+        mutationRateSlider.addEventListener('input', (event) => {
+            mutationRate = event.target.value / 100;
+            mutationRateValue.textContent = `${event.target.value}%`;
+        });
+
+        drawGrid();
+    </script>
+</body>
+</html>
